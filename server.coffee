@@ -29,7 +29,7 @@ run = (error, value) ->
       if (frame % snapshotDelay) is 0
         # Update clients
         for c in wss.clients
-          snapshot = galaxy.snapshot c.data.knownBodies, c.data.x, c.data.y, c.data.width, c.data.height
+          snapshot = galaxy.snapshot c.data.knownBodies, c.data.viewport
           c.send JSON.stringify {snapshot}
 
         #db?.set 'boilerplate', JSON.stringify(simulator.grid)
@@ -37,16 +37,18 @@ run = (error, value) ->
 
   wss.on 'connection', (c) ->
     c.data =
-      x: 100
-      y: 100
-      width: 600
-      height: 400
+      viewport: null
       knownBodies: {}
 
     c.on 'message', (msg) ->
       try
         msg = JSON.parse msg
-        console.log msg
+
+        if msg.viewport
+          c.data.viewport = msg.viewport
+        else
+          # Unknown message.
+          console.log msg
 
       catch e
         console.log 'invalid JSON', e, msg

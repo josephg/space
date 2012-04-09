@@ -1,6 +1,6 @@
 canvas = document.getElementsByTagName('canvas')[0]
-canvas.width = 800
-canvas.height = 600
+canvas.width = 1024
+canvas.height = 768
 
 ctx = canvas.getContext '2d'
 
@@ -20,6 +20,8 @@ delay = 5 # Our delay in frames behind realtime
 pendingSnapshots = []
 
 dt = 33 # dt per tick (ms). Must match server.
+
+viewportX = viewportY = 0
 
 requestAnimationFrame = window.requestAnimationFrame or window.mozRequestAnimationFrame or
                         window.webkitRequestAnimationFrame or window.msRequestAnimationFrame
@@ -87,20 +89,23 @@ dirty = false
 draw = ->
   return unless dirty # Only draw once despite how many updates have happened
   ctx.fillStyle = 'black'
-  ctx.fillRect 0, 0, 800, 600
+  ctx.fillRect 0, 0, 1024, 768
 
   if frame is null or frame < 0
     ctx.font = '60px Helvetica'
     ctx.fillText 'Buffering gameplay', 0, 0, 0
-
-  ctx.strokeStyle = 'blue'
-  ctx.strokeRect 100, 100, 600, 400
 
   #ctx.fillStyle = 'green'
   #ctx.fillRect 100*pendingSnapshots.length, 0, 100, 100
   
   #ctx.fillStyle = 'red'
   #ctx.fillRect 25, 25, 50, 50 if snapshotted
+
+  #ctx.strokeStyle = 'blue'
+  #ctx.strokeRect 100, 100, 600, 400
+
+  ctx.save()
+  ctx.translate -viewportX, -viewportY
 
   space.eachShape (shape) ->
     ctx.strokeStyle = 'grey'
@@ -110,6 +115,8 @@ draw = ->
     ctx.fillStyle = "rgb(#{col}, #{col}, #{col})"
 
     shape.draw()
+
+  ctx.restore()
 
   dirty = false
 
@@ -141,6 +148,28 @@ ws.onmessage = (msg) ->
     if frame is null
       # This is the first snapshot.
       frame = -delay
+
+send = (msg) -> ws.send JSON.stringify msg
+
+queuedMessage = false
+sendViewportToServer = ->
+  # Send a rate limited viewport message to the server.
+  return if queuedMessage
+  queuedMessage = true
+  setTimeout ->
+      send viewport:{x:viewportX, y:viewportY, w:canvas.width, h:canvas.height}
+      queuedMessage = false
+    , 50
+
+ws.onopen = ->
+  sendViewportToServer()
+
+window.onmousewheel = (e) ->
+  #console.log "mouse scroll", e
+  viewportX -= e.wheelDeltaX
+  viewportY -= e.wheelDeltaY
+  sendViewportToServer()
+  e.preventDefault()
 
 
 cp.PolyShape::draw = ->

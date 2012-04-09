@@ -2,6 +2,8 @@ cp = require 'chipmunk'
 
 nextId = 0
 
+snapshotBuffer = 1000
+
 module.exports = (initialSnapshot) ->
   space = new cp.Space()
   
@@ -34,12 +36,18 @@ module.exports = (initialSnapshot) ->
   step: (dt) ->
     space.step dt / 1000
 
-  snapshot: (knownObjects, x, y, width, height) ->
+  snapshot: (knownObjects, viewport) ->
     bodies = {}
 
-    space.bbQuery {l:x, r:x+width, b:y, t:y+height}, cp.ALL_LAYERS, cp.NO_GROUP, (shape) ->
-      bodies[shape.body.id] = shape.body
+    if viewport
+      bb = cp.bb( # (l,b,r,t)
+        viewport.x - snapshotBuffer,
+        viewport.y - snapshotBuffer,
+        viewport.x + viewport.w + snapshotBuffer,
+        viewport.y + viewport.h + snapshotBuffer)
 
+      space.bbQuery bb, cp.ALL_LAYERS, cp.NO_GROUP, (shape) ->
+        bodies[shape.body.id] = shape.body
 
     snapshot = {}
     for id, b of bodies
