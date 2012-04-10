@@ -5,6 +5,7 @@ canvas.height = 768
 ctx = canvas.getContext '2d'
 
 ws = new WebSocket "ws://#{window.location.host}"
+ws.binaryType = 'arraybuffer'
 
 space = new cp.Space
 
@@ -25,6 +26,55 @@ viewportX = viewportY = 0
 
 requestAnimationFrame = window.requestAnimationFrame or window.mozRequestAnimationFrame or
                         window.webkitRequestAnimationFrame or window.msRequestAnimationFrame
+
+packetHeaders =
+  100:
+    name: 'snapshot'
+    read: (data) ->
+      r = read data, 1
+      snapshot = {}
+
+      return snapshot unless r.bytesLeft()
+      for [0...r.uint16()]
+        # Read an update packet.
+        id = r.uint32()
+        snapshot[id] = s = {}
+        s[k] = r.float32() for k in ['x', 'y', 'a', 'vx', 'vy', 'w']
+
+      return snapshot unless r.bytesLeft()
+      for [0...r.uint16()]
+        # Create packets
+        id = r.uint32()
+        s = snapshot[id]
+        s.m = r.float32()
+        s.i = r.float32()
+
+        numShapes = r.uint16()
+        s.shapes = new Array numShapes
+        for i in [0...numShapes]
+          numVerts = r.uint16()
+          verts = s.shapes[i] = new Array numVerts * 2
+          for v in [0...numVerts * 2]
+            verts[v] = r.float32()
+
+      return snapshot unless r.bytesLeft()
+      for [0...r.uint16()]
+        # Remove objects.
+        id = r.uint32()
+        snapshot[id] = null
+
+      throw new Error 'Misaligned bytes' unless r.bytesLeft() is 0
+      snapshot
+
+readPacket = (data) ->
+  r = read data
+  type = r.uint8()
+  throw new Error 'Not a valid id!' unless packetHeaders[type]
+
+  type: packetHeaders[type].name
+  data: packetHeaders[type].read data
+
+
 
 prevSnapshot = null
 applySnapshot = (snapshot) ->
@@ -151,26 +201,34 @@ runFrame = ->
   lastFrame = nominalTime
 
   update()
-  dirty = true
-  requestAnimationFrame draw
+  if !dirty
+    dirty = true
+    requestAnimationFrame draw
 
 runFrame()
 
 nextSnapshotFrame = 0
 ws.onmessage = (msg) ->
-  msg = JSON.parse msg.data
-  if msg.snapshot
-    snapshot =
-      data: msg.snapshot
-      frame: nextSnapshotFrame
-    #console.log "frame #{frame} got snapshot #{snapshot.frame}"
-    #console.log snapshot.data
-    nextSnapshotFrame += snapshotDelay
-    pendingSnapshots.push snapshot
+  if typeof msg.data is 'string'
+    msg = JSON.parse msg.data
+    console.log msg.data
+  else
+    # Binary.
+    msg = readPacket msg.data
 
-    if frame is null
-      # This is the first snapshot.
-      frame = -delay
+    switch msg.type
+      when 'snapshot'
+        snapshot =
+          data: msg.data
+          frame: nextSnapshotFrame
+        #console.log "frame #{frame} got snapshot #{snapshot.frame}"
+        #console.log snapshot.data
+        nextSnapshotFrame += snapshotDelay
+        pendingSnapshots.push snapshot
+
+        if frame is null
+          # This is the first snapshot.
+          frame = -delay
 
 send = (msg) -> ws.send JSON.stringify msg
 

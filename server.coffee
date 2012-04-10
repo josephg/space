@@ -8,10 +8,11 @@ app = express.createServer()
 app.use express.static("#{__dirname}/")
 port = 8123
 
-
 # How frequently (in ms) should we advance the world
 dt = 33
 snapshotDelay = 5
+  
+wire = require './wire'
 
 run = (error, initialSnapshot) ->
   initialSnapshot = JSON.parse initialSnapshot if initialSnapshot
@@ -34,10 +35,11 @@ run = (error, initialSnapshot) ->
         # Update clients
         for c in wss.clients
           snapshot = galaxy.snapshot frame, c.data
+          msg = wire.snapshot.pack snapshot
           #console.log snapshot
-          msg = JSON.stringify {snapshot}
-          bytesSent += msg.length
-          c.send msg
+          #msg = JSON.stringify {snapshot}
+          bytesSent += msg.byteLength
+          c.send new DataView(msg), binary:true
 
         #db?.set 'boilerplate', JSON.stringify(simulator.grid)
     , dt
