@@ -13,15 +13,19 @@ port = 8123
 dt = 33
 snapshotDelay = 5
 
-run = (error, value) ->
-  value = JSON.parse value if value
+run = (error, initialSnapshot) ->
+  initialSnapshot = JSON.parse initialSnapshot if initialSnapshot
   
-  galaxy = new require('./galaxy') value
+  galaxy = new require('./galaxy') initialSnapshot, {snapshotDelay, dt}
 
   WebSocketServer = require('ws').Server
   wss = new WebSocketServer {server: app}
 
   frame = 0
+
+  bytesSent = 0
+  bytesReceived = 0
+
   setInterval ->
       frame++
       galaxy.step dt
@@ -29,8 +33,11 @@ run = (error, value) ->
       if (frame % snapshotDelay) is 0
         # Update clients
         for c in wss.clients
-          snapshot = galaxy.snapshot c.data.knownBodies, c.data.viewport
-          c.send JSON.stringify {snapshot}
+          snapshot = galaxy.snapshot frame, c.data
+          #console.log snapshot
+          msg = JSON.stringify {snapshot}
+          bytesSent += msg.length
+          c.send msg
 
         #db?.set 'boilerplate', JSON.stringify(simulator.grid)
     , dt
@@ -38,10 +45,16 @@ run = (error, value) ->
   wss.on 'connection', (c) ->
     c.data =
       viewport: null
-      knownBodies: {}
+      # Maps object id -> false if the client can't see the object now, true if it can.
+      # Objects aren't in the map if the client has never seen them.
+      seenObjects: {}
+      # This is a list of ids of the elements which the client saw last frame.
+      # It is a copy of the keys in seenObjects which map to true.
+      visibleLastFrame: []
 
     c.on 'message', (msg) ->
       try
+        bytesReceived += msg.length
         msg = JSON.parse msg
 
         if msg.viewport
@@ -53,6 +66,10 @@ run = (error, value) ->
       catch e
         console.log 'invalid JSON', e, msg
 
+  setInterval ->
+      console.log "TX: #{bytesSent}  RX: #{bytesReceived}"
+      bytesSent = bytesReceived = 0
+    , 1000
 
   app.listen port
   console.log "Listening on port #{port}"

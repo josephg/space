@@ -26,41 +26,63 @@ viewportX = viewportY = 0
 requestAnimationFrame = window.requestAnimationFrame or window.mozRequestAnimationFrame or
                         window.webkitRequestAnimationFrame or window.msRequestAnimationFrame
 
+prevSnapshot = null
 applySnapshot = (snapshot) ->
-  #console.log "frame #{frame} applySnapshot #{snapshot.frame}"
-  for id, s of snapshot.data
-    if bodies[id]
-      b = bodies[id]
-    else
-      throw new Error "missing data for #{id}" unless s.shapes
+  if prevSnapshot isnt null and snapshot.frame isnt prevSnapshot.frame + snapshotDelay
+    throw new Error "Snapshots not applied in order: #{prevSnapshot.frame} -> #{snapshot.frame}"
 
-      b = bodies[id] = new cp.Body s.m, s.i
-      b.geometry = []
-      for verts in s.shapes
-        b.geometry.push new cp.PolyShape b, verts, cp.v(0,0)
+  # Look for new objects in the snapshot and add them to the bodies set
+  for id, s of snapshot.data when s isnt null and bodies[id] is undefined
+    # Make a new body using the data and add it to the space.
+    throw new Error "missing data for #{id}" unless s.shapes
+    #console.log "adding #{id}"
+    b = bodies[id] = new cp.Body s.m, s.i
+    b.geometry = []
+    for verts in s.shapes
+      b.geometry.push new cp.PolyShape b, verts, cp.v(0,0)
 
-    b.setAngle s.a
-    b.setPos cp.v(s.x, s.y)
-    b.setVelocity cp.v(s.vx, s.vy)
-    b.w = s.w
-    b.f.x = s.fx
-    b.f.y = s.fy
-    b.t = s.t
-    #console.log "snapshot #{b.p.x}"
-  
   for id, b of bodies # Bodies that are no longer in the region sent by the server
-    if snapshot.data[id]
-      # Add body if it isn't in the space
-      if b.space
-        space.reindexShape s for s in b.shapeList
-      else
-        space.addBody b
-        space.addShape s for s in b.geometry
-    else
-      if b.space
-        space.removeBody b
-        space.removeShape s for s in b.geometry
+    s = snapshot.data[id]
 
+    if s is null
+      # Remove the object from the space.
+      #console.log "removing #{id}"
+      space.removeBody b
+      space.removeShape shape for shape in b.geometry
+
+    # Skip objects that aren't on the screen and aren't being re-added.
+    continue if !b.space and !s
+
+    if s is undefined
+      # The body is just drifting. Update it based on its last snapshot position.
+      throw new Error 'Missing data' unless prevSnapshot?.data[id]
+      p = prevSnapshot.data[id]
+      
+      mult = dt * snapshotDelay / 1000
+
+      s = snapshot.data[id] =
+        a: p.a + p.w * mult
+        x: p.x + p.vx * mult
+        y: p.y + p.vy * mult
+        w: p.w
+        vx: p.vx
+        vy: p.vy
+
+    b.setAngle s.a # Angle
+    b.setPos cp.v(s.x, s.y)
+    b.w = s.w # Angular momentum
+    b.setVelocity cp.v(s.vx, s.vy)
+
+    if !b.space
+      # re-add the body to the space.
+      #console.log "inserting #{id}"
+      space.addBody b
+      space.addShape s for s in b.geometry
+    else
+      space.reindexShape s for s in b.shapeList
+
+  prevSnapshot = snapshot
+  
   console.log "time warping from #{frame} to #{snapshot.frame}" if frame isnt snapshot.frame
   frame = snapshot.frame
 
@@ -142,6 +164,7 @@ ws.onmessage = (msg) ->
       data: msg.snapshot
       frame: nextSnapshotFrame
     #console.log "frame #{frame} got snapshot #{snapshot.frame}"
+    #console.log snapshot.data
     nextSnapshotFrame += snapshotDelay
     pendingSnapshots.push snapshot
 
@@ -159,7 +182,7 @@ sendViewportToServer = ->
   setTimeout ->
       send viewport:{x:viewportX, y:viewportY, w:canvas.width, h:canvas.height}
       queuedMessage = false
-    , 50
+    , 100
 
 ws.onopen = ->
   sendViewportToServer()
