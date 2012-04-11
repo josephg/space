@@ -18,6 +18,7 @@ setInterval ->
 cp.Body::updateSnapshot = (frame) ->
   if @snapshotFrame < frame
     s =
+      id:@id
       a:@a # angle
       x:@p.x # Position
       y:@p.y
@@ -74,8 +75,8 @@ module.exports = (initialSnapshot, options) ->
     body.setPos cp.v(Math.floor(i/10) * 100, (i % 10) * 100)
     #body.w = Math.random() * 3 - 1.5
     space.addShape new cp.PolyShape(body, verts, cp.v(0,0))
-    body.vx = Math.random() * 10 - 5
-    body.vy = Math.random() * 10 - 5
+    #body.vx = Math.random() * 10 - 5
+    #body.vy = Math.random() * 10 - 5
     body.w_limit = 5
     body.v_limit = 200
 
@@ -166,10 +167,16 @@ module.exports = (initialSnapshot, options) ->
       space.bbQuery bb, cp.ALL_LAYERS, cp.NO_GROUP, (shape) ->
         visibleBodies[shape.body.id] = shape.body
 
-    snapshot = {}
+    # A snapshot is made up of three lists of objects:
+    # - Objects that the client hasn't seen before, that need to be created
+    # - Objects with new (updated) state
+    # - Objects which should be removed from the simulation for some reason.
+    creates = []
+    updates = []
+    removes = []
 
     for id in visibleLastFrame when !visibleBodies[id]
-      snapshot[id] = null
+      removes.push id
       seenObjects[id] = false
 
     visibleLastFrame.length = 0
@@ -189,19 +196,16 @@ module.exports = (initialSnapshot, options) ->
       if seenObjects[id] is undefined
         # The client has never seen the object before.
         # Copy the snapshot and add extra fields for the object's geometry.
-        snapshot[id] =
-          a:s.a
-          x:s.x
-          y:s.y
-          vx:s.vx
-          vy:s.vy
-          w:s.w
 
-        snapshot[id].m = b.m # Mass
-        snapshot[id].i = b.i # Moment
-        snapshot[id].shapes = (s.verts for s in b.shapeList)
+        creates.push
+          id: id
+          m: b.m
+          i: b.i
+          shapes: (shape.verts for shape in b.shapeList)
 
-      else if b.lastSnapshot and seenObjects[id] is true
+      if b.lastSnapshot and seenObjects[id] is true
+        # We might be able to skip updating the object, because its just drifting.
+
         # Check if object fields differ
         prev = b.lastSnapshot
 
@@ -210,8 +214,8 @@ module.exports = (initialSnapshot, options) ->
             !similar(s.x, prev.x + mult * prev.vx) or
             !similar(s.y, prev.y + mult * prev.vy) or
             !similar(s.a, prev.a + mult * prev.w)
-          # There's been a collision or something. Add the full object.
-          snapshot[id] = s
+          # Nope - there's been a collision or something. Add the full object.
+          updates.push s
           stats.differ++
 
           #console.log s.w, prev.w, '\n', s.vx, prev.vx, '\n', s.vy, prev.vy, '\n',
@@ -219,14 +223,14 @@ module.exports = (initialSnapshot, options) ->
           #  s.y, prev.y + mult * prev.vy, '\n',
           #  s.a, prev.a + mult * prev.w
         else
-          # The object's state can be inferred from the previous frame.
           stats.skip++
       else
-        snapshot[id] = s
+        console.log s
+        updates.push s
 
       seenObjects[id] = true
 
-    snapshot
+    {creates, updates, removes}
     
 
 

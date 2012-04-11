@@ -45,6 +45,7 @@ packetHeaders =
       for [0...r.uint16()]
         # Create packets
         id = r.uint32()
+        throw new Error "Got a create but no update for #{id}" unless snapshot[id]
         s = snapshot[id]
         s.m = r.float32()
         s.i = r.float32()

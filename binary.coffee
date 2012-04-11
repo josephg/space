@@ -48,6 +48,7 @@ write = (buffer, offset, len) ->
   float32: (value) -> view.setFloat32 (p 4), value, true; @
 
   bytesLeft: -> view.byteLength - pos
+  pos: -> pos
 
 if exports?
   exports.read = read
