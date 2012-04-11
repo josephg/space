@@ -139,6 +139,7 @@ applySnapshot = (snapshot) ->
 
 snapshotted = false
 update = ->
+  #console.log 'update'
   return if frame is null # No snapshots yet
 
   frame++
@@ -160,6 +161,7 @@ update = ->
 dirty = false
 draw = ->
   return unless dirty # Only draw once despite how many updates have happened
+  #console.log 'draw'
   ctx.fillStyle = 'black'
   ctx.fillRect 0, 0, 1024, 768
 
@@ -245,13 +247,32 @@ sendViewportToServer = ->
 ws.onopen = ->
   sendViewportToServer()
 
-window.onmousewheel = (e) ->
+document.onmousewheel = (e) ->
   #console.log "mouse scroll", e
   viewportX -= e.wheelDeltaX
   viewportY -= e.wheelDeltaY
   sendViewportToServer()
   e.preventDefault()
 
+downKeys = {}
+
+keyEvent = (e, down) ->
+  key = String.fromCharCode e.keyCode
+  #console.log e.keyCode, key
+
+  if key in ['W', 'A', 'S', 'D']
+    e.stopPropagation()
+    e.preventDefault()
+
+    # Ignore (debounce!)
+    return if down and downKeys[key]
+
+    downKeys[key] = down
+    send {key, down}
+
+
+document.onkeydown = (e) -> keyEvent e, true
+document.onkeyup = (e) -> keyEvent e, false
 
 cp.PolyShape::draw = ->
   ctx.beginPath()

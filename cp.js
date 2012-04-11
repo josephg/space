@@ -1524,7 +1524,7 @@ Body.prototype.updateVelocity = function(gravity, damping, dt)
 	//this.vx = v.x; this.vy = v.y;
 	var v_limit = this.v_limit;
 	var lensq = vx * vx + vy * vy;
-	var scale = (lensq > v_limit*v_limit) ? v_limit / Math.sqrt(len) : 1;
+	var scale = (lensq > v_limit*v_limit) ? v_limit / Math.sqrt(lensq) : 1;
 	this.vx = vx * scale;
 	this.vy = vy * scale;
 	
@@ -2353,7 +2353,6 @@ BBTree.prototype.segmentQuery = function(a, b, t_exit, func)
 
 BBTree.prototype.query = function(bb, func)
 {
-  console.log('query', bb);
 	if(this.root) subtreeQuery(this.root, bb, func);
 };
 
@@ -4250,7 +4249,6 @@ Space.prototype.segmentQueryFirst = function(start, end, layers, group)
 Space.prototype.bbQuery = function(bb, layers, group, func)
 {
 	var helper = function(shape){
-    console.log('asdf');
 		if(
 			!(shape.group && group === shape.group) && (layers & shape.layers) &&
 			bbIntersects2(bb, shape.bb_l, shape.bb_b, shape.bb_r, shape.bb_t)

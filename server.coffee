@@ -53,6 +53,9 @@ run = (error, initialSnapshot) ->
       # This is a list of ids of the elements which the client saw last frame.
       # It is a copy of the keys in seenObjects which map to true.
       visibleLastFrame: []
+      avatar: null
+
+    c.data.avatar = galaxy.getAvatar c.data
 
     c.on 'message', (msg) ->
       try
@@ -61,6 +64,9 @@ run = (error, initialSnapshot) ->
 
         if msg.viewport
           c.data.viewport = msg.viewport
+        else if msg.key
+          {key, down} = msg
+          galaxy.key c.data, key, down
         else
           # Unknown message.
           console.log msg

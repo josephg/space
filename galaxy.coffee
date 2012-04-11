@@ -8,12 +8,14 @@ stats =
   skip: 0
   differ: 0
 
+snapshotDelay = dt = null
+
 setInterval ->
     console.log "skip: #{stats.skip} differ: #{stats.differ}"
     stats.skip = stats.differ = 0
   , 1000
 
-cp.Body::updateSnapshot = (frame, snapshotDelay) ->
+cp.Body::updateSnapshot = (frame) ->
   if @snapshotFrame < frame
     s =
       a:@a # angle
@@ -36,29 +38,56 @@ cp.Body::updateSnapshot = (frame, snapshotDelay) ->
   else
     @snapshot
 
+cp.Body::setEngine = (name, fx, fy, offsetx, offsety) ->
+  unless fx or fy
+    delete this.forces[name]
+  else
+    # The force is applied as a series of impulses, a little bit every frame.
+    fx *= dt/1000
+    fy *= dt/1000
+    this.forces[name] = {f:cp.v(fx, fy), r:cp.v(offsetx, offsety)}
+
+  
+  #for k, {f, r} of @forces
+  #    b.applyImpulse cp.v.rotate(f, b.rot), cp.v.rotate(r, b.rot)
+
 # Used to check if we can skip a body snapshot (because its exactly where it should be
 # if you just multiply out vx, vy and w)
 similar = (x, y) -> Math.abs(x - y) < 1e-12
 
 module.exports = (initialSnapshot, options) ->
+  snapshotDelay = options.snapshotDelay
+  dt = options.dt
+
   space = new cp.Space()
+  bodies = {}
   
   for i in [0...100]
-    width = 50
-    height = 50
     mass = Math.random() * 100
+    if i < 10 then mass = 50
 
-    body = space.addBody new cp.Body(mass, cp.momentForBox(mass, width, height))
+    verts = [-25, -25, -20, 0, 0, 20, 20, 0, 25, -25]
+    cp.recenterPoly verts
+
+    body = space.addBody new cp.Body(mass, cp.momentForPoly(mass, verts, cp.v(0,0)))
+
     body.setPos cp.v(Math.floor(i/10) * 100, (i % 10) * 100)
-    body.w = Math.random() * 3 - 1.5
-    space.addShape new cp.BoxShape(body, width, height)
+    #body.w = Math.random() * 3 - 1.5
+    space.addShape new cp.PolyShape(body, verts, cp.v(0,0))
     body.vx = Math.random() * 10 - 5
     body.vy = Math.random() * 10 - 5
+    body.w_limit = 5
+    body.v_limit = 200
 
     body.id = nextId++
     body.lastSnapshot = null
     body.snapshot = null
     body.snapshotFrame = -1
+    body.forces = {}
+    body.jx = body.jy = 0
+    body.jw = 0
+
+    bodies[body.id] = body
 
 
   ###
@@ -73,12 +102,58 @@ module.exports = (initialSnapshot, options) ->
   body.vy = 0
   ###
 
+  getAvatar: (client) ->
+    for id, body of bodies
+      if !body.client?
+        body.client = client
+        return body
+
+    null
+
+  key: (client, key, down) ->
+    avatar = client.avatar
+    return unless avatar
+    switch key
+      when 'A'
+        if down
+          avatar.setEngine 'left', 1000, 0, 0, 20
+        else
+          avatar.setEngine 'left'
+
+      when 'D'
+        if down
+          avatar.setEngine 'right', -1000, 0, 0, 20
+        else
+          avatar.setEngine 'right'
+
+      when 'W'
+        if down
+          avatar.setEngine 'rear', 0, 1600, 0, -10
+        else
+          avatar.setEngine 'rear'
+
+  ###
+      when 'A'
+        if down
+          avatar.setEngine 'left', 0, 1000, 20, 0
+        else
+          avatar.setEngine 'left'
+
+      when 'D'
+        if down
+          avatar.setEngine 'right', 0, 1000, -20, 0
+        else
+          avatar.setEngine 'right'
+  ###
 
   step: (dt) ->
+    for id, b of bodies
+      for k, {f, r} of b.forces
+        b.applyImpulse cp.v.rotate(f, b.rot), cp.v.rotate(r, b.rot)
     space.step dt / 1000
 
   snapshot: (frame, {seenObjects, viewport, visibleLastFrame}) ->
-    bodies = {}
+    visibleBodies = {}
 
     if viewport
       bb = cp.bb( # (l,b,r,t)
@@ -89,11 +164,11 @@ module.exports = (initialSnapshot, options) ->
 
       # Gather all the bodies that the player can see
       space.bbQuery bb, cp.ALL_LAYERS, cp.NO_GROUP, (shape) ->
-        bodies[shape.body.id] = shape.body
+        visibleBodies[shape.body.id] = shape.body
 
     snapshot = {}
 
-    for id in visibleLastFrame when !bodies[id]
+    for id in visibleLastFrame when !visibleBodies[id]
       snapshot[id] = null
       seenObjects[id] = false
 
@@ -101,10 +176,10 @@ module.exports = (initialSnapshot, options) ->
 
     #console.log "Snapshot frame #{frame}"
 
-    for id, b of bodies
+    for id, b of visibleBodies
       visibleLastFrame.push id
 
-      s = b.updateSnapshot frame, options.snapshotDelay
+      s = b.updateSnapshot frame
 
       # The body's snapshot is in b.snapshot and b.lastSnapshot has either the
       # previous snapshot or null.
