@@ -30,8 +30,7 @@ requestAnimationFrame = window.requestAnimationFrame or window.mozRequestAnimati
 packetHeaders =
   100:
     name: 'snapshot'
-    read: (data) ->
-      r = read data, 1
+    read: (r) ->
       snapshot = {}
 
       return snapshot unless r.bytesLeft()
@@ -39,7 +38,7 @@ packetHeaders =
         # Read an update packet.
         id = r.uint32()
         snapshot[id] = s = {}
-        s[k] = r.float32() for k in ['x', 'y', 'a', 'vx', 'vy', 'w']
+        s[k] = r.float32() for k in ['x', 'y', 'a', 'vx', 'vy', 'w', 'ax', 'ay', 'aw']
 
       return snapshot unless r.bytesLeft()
       for [0...r.uint16()]
@@ -66,14 +65,25 @@ packetHeaders =
 
       throw new Error 'Misaligned bytes' unless r.bytesLeft() is 0
       snapshot
+  101: # lua messages.
+    name: 'lua message'
+    read: (r) ->
+      # bleh ignore for now.
+  
+  102:
+    name: 'set avatar'
+    read: (r) -> r.uint32()
+
 
 readPacket = (data) ->
   r = read data
   type = r.uint8()
-  throw new Error 'Not a valid id!' unless packetHeaders[type]
+  unless packetHeaders[type]
+    console.error 'Not a valid message type!'
+    return
 
   type: packetHeaders[type].name
-  data: packetHeaders[type].read data
+  data: packetHeaders[type].read r
 
 
 
@@ -118,11 +128,18 @@ applySnapshot = (snapshot) ->
         w: p.w
         vx: p.vx
         vy: p.vy
+        ax: p.ax
+        ay: p.ay
+        aw: p.aw
 
     b.setAngle s.a # Angle
     b.setPos cp.v(s.x, s.y)
     b.w = s.w # Angular momentum
     b.setVelocity cp.v(s.vx, s.vy)
+
+    b.ax = s.ax
+    b.ay = s.ay
+    b.aw = s.aw
 
     if !b.space
       # re-add the body to the space.
@@ -157,6 +174,14 @@ update = ->
 
   snapshotted = skip
 
+  space.eachBody (body) ->
+    if body.ax || body.ay || body.aw
+      a = cp.v.rotate cp.v(body.ax, body.ay), body.rot
+      body.vx += dt/1000 * a.x
+      body.vy += dt/1000 * a.y
+      #body.setVelocity cp.v(body.vx + dt/1000, body.vy + dt/1000)
+      body.w += dt/1000 * body.aw
+
   space.step dt/1000 unless skip
 
 dirty = false
@@ -180,6 +205,9 @@ draw = ->
   #ctx.strokeRect 100, 100, 600, 400
 
   ctx.save()
+  ctx.translate 0, 768
+  ctx.scale 1, -1
+
   ctx.translate -viewportX, -viewportY
 
   space.eachShape (shape) ->
@@ -195,7 +223,7 @@ draw = ->
 
   dirty = false
 
-lastFrame = Date.now()
+lastFrame = 0
 
 runFrame = ->
   nominalTime = lastFrame + dt
@@ -208,8 +236,6 @@ runFrame = ->
     dirty = true
     requestAnimationFrame draw
 
-runFrame()
-
 nextSnapshotFrame = 0
 ws.onmessage = (msg) ->
   if typeof msg.data is 'string'
@@ -218,6 +244,7 @@ ws.onmessage = (msg) ->
   else
     # Binary.
     msg = readPacket msg.data
+    return unless msg
 
     switch msg.type
       when 'snapshot'
@@ -233,6 +260,12 @@ ws.onmessage = (msg) ->
           # This is the first snapshot.
           frame = -delay
 
+      when 'lua message'
+        console.log 'ignoring lua message'
+
+      when 'set avatar'
+        console.log 'avatar', msg.data
+
 send = (msg) -> ws.send JSON.stringify msg
 
 queuedMessage = false
@@ -246,12 +279,16 @@ sendViewportToServer = ->
     , 100
 
 ws.onopen = ->
+  username = prompt "LOGIN PLOX"
+  ws.send username
   sendViewportToServer()
+  lastFrame = Date.now()
+  runFrame()
 
 document.onmousewheel = (e) ->
   #console.log "mouse scroll", e
   viewportX -= e.wheelDeltaX
-  viewportY -= e.wheelDeltaY
+  viewportY += e.wheelDeltaY
   sendViewportToServer()
   e.preventDefault()
 
@@ -269,7 +306,10 @@ keyEvent = (e, down) ->
     return if down and downKeys[key]
 
     downKeys[key] = down
-    send {key, down}
+
+    m = {'W':'up', 'A':'left', 'S':'down', 'D':'right'}
+    ws.send "#{m[key]} #{if down then 'on' else 'off'}"
+    #send {key, down}
 
 
 document.onkeydown = (e) -> keyEvent e, true

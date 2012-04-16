@@ -225,7 +225,7 @@ module.exports = (initialSnapshot, options) ->
         else
           stats.skip++
       else
-        console.log s
+        #console.log s
         updates.push s
 
       seenObjects[id] = true
