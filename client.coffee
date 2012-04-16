@@ -50,7 +50,7 @@ packetHeaders =
         id = r.uint32()
         throw new Error "Got a create but no update for #{id}" unless snapshot[id]
         s = snapshot[id]
-        s.type = r.uint8()
+        s.type = shipTypes[r.uint8()]
         s.res1 = r.uint8()
         s.res2 = r.uint8()
         s.res3 = r.uint8()
@@ -107,6 +107,7 @@ applySnapshot = (snapshot) ->
     #console.log "adding #{id}"
     b = bodies[id] = new cp.Body s.m, s.i
     b.geometry = []
+    b.type = s.type
     for verts in s.shapes
       b.geometry.push new cp.PolyShape b, verts, cp.v(0,0)
 
@@ -350,8 +351,8 @@ cp.PolyShape::draw = ->
 
   p = @body.p
   if  @body.type is 'ship' and
-      p.x < viewportX or p.x > viewportX + canvas.width or
-      p.y < viewportY or p.y > viewportY + canvas.height
+      (p.x < viewportX or p.x > viewportX + canvas.width or
+      p.y < viewportY or p.y > viewportY + canvas.height)
 
     ctx.save()
     ctx.strokeStyle = "rgba(255, 100, 100, 1)"
