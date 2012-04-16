@@ -29,6 +29,8 @@ viewportX = viewportY = 0
 requestAnimationFrame = window.requestAnimationFrame or window.mozRequestAnimationFrame or
                         window.webkitRequestAnimationFrame or window.msRequestAnimationFrame
 
+shipTypes = "ship bullet".split(' ')
+
 packetHeaders =
   100:
     name: 'snapshot'
@@ -48,6 +50,10 @@ packetHeaders =
         id = r.uint32()
         throw new Error "Got a create but no update for #{id}" unless snapshot[id]
         s = snapshot[id]
+        s.type = r.uint8()
+        s.res1 = r.uint8()
+        s.res2 = r.uint8()
+        s.res3 = r.uint8()
         s.m = r.float32()
         s.i = r.float32()
 
@@ -189,15 +195,15 @@ update = ->
   space.step dt/1000 unless skip
 
   if body = bodies[avatar]
-    viewportX = body.p.x - 1024/2
-    viewportY = body.p.y - 768/2
+    viewportX = body.p.x - canvas.width/2
+    viewportY = body.p.y - canvas.height/2
 
 dirty = false
 draw = ->
   return unless dirty # Only draw once despite how many updates have happened
   #console.log 'draw'
   ctx.fillStyle = 'black'
-  ctx.fillRect 0, 0, 1024, 768
+  ctx.fillRect 0, 0, canvas.width, canvas.height
 
   if frame is null or frame < 0
     ctx.font = '60px Helvetica'
@@ -213,13 +219,13 @@ draw = ->
   #ctx.strokeRect 100, 100, 600, 400
 
   ctx.save()
-  ctx.translate 0, 768
+  ctx.translate 0, canvas.height
   ctx.scale 1, -1
 
-  #ctx.translate 1024/2, 768/2
+  #ctx.translate canvas.width/2, canvas.height/2
   #if bodies[avatar]
   #  ctx.rotate -bodies[avatar].a
-  #ctx.translate -1024/2, -768/2
+  #ctx.translate -canvas.width/2, -canvas.height/2
 
   ctx.translate -viewportX, -viewportY
 
@@ -337,6 +343,33 @@ document.onkeydown = (e) -> keyEvent e, true
 document.onkeyup = (e) -> keyEvent e, false
 
 cp.PolyShape::draw = ->
+  
+  cx = viewportX + canvas.width / 2
+  cy = viewportY + canvas.height / 2
+  radius = Math.min(canvas.width, canvas.height) / 2
+
+  p = @body.p
+  if  @body.type is 'ship' and
+      p.x < viewportX or p.x > viewportX + canvas.width or
+      p.y < viewportY or p.y > viewportY + canvas.height
+
+    ctx.save()
+    ctx.strokeStyle = "rgba(255, 100, 100, 1)"
+    ctx.fillStyle = "rgba(255, 100, 100, 0.5)"
+    
+    ctx.beginPath()
+    vect = cp.v.sub(p, cp.v(cx, cy))
+    dist = cp.v.len vect
+    dot = cp.v.mult(cp.v.normalize(vect), radius)
+    
+    r = 1/Math.log(Math.E + (dist - radius) / 100) * 50
+    ctx.arc dot.x + cx, dot.y + cy, r, 0, Math.PI*2
+    ctx.fill()
+    ctx.restore()
+
+
+
+
   ctx.beginPath()
 
   verts = @tVerts
