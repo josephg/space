@@ -298,7 +298,8 @@ keyEvent = (e, down) ->
   key = String.fromCharCode e.keyCode
   #console.log e.keyCode, key
 
-  if key in ['W', 'A', 'S', 'D']
+  m = {'W':'up', 'A':'left', 'S':'down', 'D':'right', ' ':'fire'}
+  if m[key]
     e.stopPropagation()
     e.preventDefault()
 
@@ -307,7 +308,6 @@ keyEvent = (e, down) ->
 
     downKeys[key] = down
 
-    m = {'W':'up', 'A':'left', 'S':'down', 'D':'right'}
     ws.send "#{m[key]} #{if down then 'on' else 'off'}"
     #send {key, down}
 
