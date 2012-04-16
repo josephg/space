@@ -7,6 +7,8 @@ ctx = canvas.getContext '2d'
 ws = new WebSocket "ws://#{window.location.host}"
 ws.binaryType = 'arraybuffer'
 
+ws.onerror = (e) -> console.log e
+
 space = new cp.Space
 
 # Map from id -> body.
@@ -175,6 +177,8 @@ update = ->
   snapshotted = skip
 
   space.eachBody (body) ->
+
+
     if body.ax || body.ay || body.aw
       a = cp.v.rotate cp.v(body.ax, body.ay), body.rot
       body.vx += dt/1000 * a.x
@@ -183,6 +187,10 @@ update = ->
       body.w += dt/1000 * body.aw
 
   space.step dt/1000 unless skip
+
+  if body = bodies[avatar]
+    viewportX = body.p.x - 1024/2
+    viewportY = body.p.y - 768/2
 
 dirty = false
 draw = ->
@@ -208,6 +216,11 @@ draw = ->
   ctx.translate 0, 768
   ctx.scale 1, -1
 
+  #ctx.translate 1024/2, 768/2
+  #if bodies[avatar]
+  #  ctx.rotate -bodies[avatar].a
+  #ctx.translate -1024/2, -768/2
+
   ctx.translate -viewportX, -viewportY
 
   space.eachShape (shape) ->
@@ -224,6 +237,8 @@ draw = ->
   dirty = false
 
 lastFrame = 0
+
+avatar = null
 
 runFrame = ->
   nominalTime = lastFrame + dt
@@ -264,7 +279,9 @@ ws.onmessage = (msg) ->
         console.log 'ignoring lua message'
 
       when 'set avatar'
+        avatar = msg.data
         console.log 'avatar', msg.data
+
 
 send = (msg) -> ws.send JSON.stringify msg
 
@@ -279,7 +296,12 @@ sendViewportToServer = ->
     , 100
 
 ws.onopen = ->
-  username = prompt "LOGIN PLOX"
+  if window.location.hash
+    username = window.location.hash.substr(1)
+  else
+    username = prompt "LOGIN PLOX"
+    window.location.hash = username
+
   ws.send username
   sendViewportToServer()
   lastFrame = Date.now()
@@ -289,7 +311,6 @@ document.onmousewheel = (e) ->
   #console.log "mouse scroll", e
   viewportX -= e.wheelDeltaX
   viewportY += e.wheelDeltaY
-  sendViewportToServer()
   e.preventDefault()
 
 downKeys = {}
