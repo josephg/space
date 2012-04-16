@@ -199,6 +199,15 @@ update = ->
     viewportX = body.p.x - canvas.width/2
     viewportY = body.p.y - canvas.height/2
 
+
+starfield = ({
+    x: Math.random()*canvas.width
+    y: Math.random()*canvas.height
+    d: Math.random()*0.3+0.01
+    r: Math.random()*2
+    t: Math.random()
+} for [1..200])
+
 dirty = false
 draw = ->
   return unless dirty # Only draw once despite how many updates have happened
@@ -219,6 +228,25 @@ draw = ->
   #ctx.strokeStyle = 'blue'
   #ctx.strokeRect 100, 100, 600, 400
 
+
+  ctx.save()
+  for {x, y, d, t} in starfield
+    r = d * 6
+    #grd = ctx.createRadialGradient x, y, 0, x, y, r
+    #grd.addColorStop 0, "hsla(#{Math.max(45,t*90)}, 50%, #{t*100}%, 1)"
+    #grd.addColorStop 1, "hsla(#{Math.max(45,t*90)}, 50%, #{t*50}%, 0)"
+    #ctx.fillStyle = grd
+    ctx.fillStyle = "hsl(#{t*45}, 100%, #{t*50}%)"
+    ctx.beginPath()
+    x = (x - viewportX * d) % canvas.width
+    x += canvas.width if x < 0
+    y = (y + viewportY * d) % canvas.height
+    y += canvas.height if y < 0
+    ctx.arc x, y, r, 0, Math.PI*2
+    ctx.fill()
+  ctx.restore()
+
+
   ctx.save()
   ctx.translate 0, canvas.height
   ctx.scale 1, -1
@@ -229,6 +257,8 @@ draw = ->
   #ctx.translate -canvas.width/2, -canvas.height/2
 
   ctx.translate -viewportX, -viewportY
+
+  
 
   space.eachShape (shape) ->
     ctx.strokeStyle = 'grey'
