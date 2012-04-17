@@ -31,6 +31,8 @@ requestAnimationFrame = window.requestAnimationFrame or window.mozRequestAnimati
 
 shipTypes = "ship bullet".split(' ')
 
+lastFrame = 0
+
 packetHeaders =
   100:
     name: 'snapshot'
@@ -106,7 +108,6 @@ readPacket = (data) ->
   data: packetHeaders[type].read r
 
 
-
 prevSnapshot = null
 applySnapshot = (snapshot) ->
   if prevSnapshot isnt null and snapshot.frame isnt prevSnapshot.frame + snapshotDelay
@@ -172,7 +173,10 @@ applySnapshot = (snapshot) ->
 
   prevSnapshot = snapshot
   
-  console.log "time warping from #{frame} to #{snapshot.frame}" if frame isnt snapshot.frame
+  if frame isnt snapshot.frame
+    console.log "time warping from #{frame} to #{snapshot.frame}"
+    lastFrame = Date.now()
+    
   frame = snapshot.frame
 
 
@@ -254,8 +258,6 @@ draw = ->
   ctx.restore()
 
   dirty = false
-
-lastFrame = 0
 
 avatar = null
 
