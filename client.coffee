@@ -35,44 +35,56 @@ packetHeaders =
   100:
     name: 'snapshot'
     read: (r) ->
-      snapshot = {}
+      data = {}
 
-      return snapshot unless r.bytesLeft()
-      for [0...r.uint16()]
-        # Read an update packet.
-        id = r.uint32()
-        snapshot[id] = s = {}
-        s[k] = r.float32() for k in ['x', 'y', 'a', 'vx', 'vy', 'w', 'ax', 'ay', 'aw']
+      flags = r.uint8()
 
-      return snapshot unless r.bytesLeft()
-      for [0...r.uint16()]
-        # Create packets
-        id = r.uint32()
-        throw new Error "Got a create but no update for #{id}" unless snapshot[id]
-        s = snapshot[id]
-        s.type = shipTypes[r.uint8()]
-        s.res1 = r.uint8()
-        s.res2 = r.uint8()
-        s.res3 = r.uint8()
-        s.m = r.float32()
-        s.i = r.float32()
+      if flags & 1 # Update frames
+        for [0...r.uint16()]
+          # Read an update packet.
+          id = r.uint32()
+          data[id] = s = {}
+          s[k] = r.float32() for k in ['x', 'y', 'a', 'vx', 'vy', 'w', 'ax', 'ay', 'aw']
 
-        numShapes = r.uint16()
-        s.shapes = new Array numShapes
-        for i in [0...numShapes]
-          numVerts = r.uint16()
-          verts = s.shapes[i] = new Array numVerts * 2
-          for v in [0...numVerts * 2]
-            verts[v] = r.float32()
+      if flags & 2 # Create frames
+        for [0...r.uint16()]
+          # Create packets
+          id = r.uint32()
+          throw new Error "Got a create but no update for #{id}" unless data[id]
+          s = data[id]
+          s.type = shipTypes[r.uint8()]
+          s.res1 = r.uint8()
+          s.res2 = r.uint8()
+          s.res3 = r.uint8()
+          s.m = r.float32()
+          s.i = r.float32()
 
-      return snapshot unless r.bytesLeft()
-      for [0...r.uint16()]
-        # Remove objects.
-        id = r.uint32()
-        snapshot[id] = null
+          numShapes = r.uint16()
+          s.shapes = new Array numShapes
+          for i in [0...numShapes]
+            numVerts = r.uint16()
+            verts = s.shapes[i] = new Array numVerts * 2
+            for v in [0...numVerts * 2]
+              verts[v] = r.float32()
+
+      if flags & 4 # Remove frames
+        for [0...r.uint16()]
+          # Remove objects.
+          id = r.uint32()
+          data[id] = null
+
+      if flags & 8 # Radar
+        radar = []
+        for [0...r.uint16()]
+          h =
+            x: r.float32()
+            y: r.float32()
+            heat: r.float32()
+          radar.push h
 
       throw new Error 'Misaligned bytes' unless r.bytesLeft() is 0
-      snapshot
+      {data, radar}
+
   101: # lua messages.
     name: 'lua message'
     read: (r) ->
@@ -271,7 +283,8 @@ ws.onmessage = (msg) ->
     switch msg.type
       when 'snapshot'
         snapshot =
-          data: msg.data
+          data: msg.data.data
+          radar: msg.data.radar
           frame: nextSnapshotFrame
         #console.log "frame #{frame} got snapshot #{snapshot.frame}"
         #console.log snapshot.data
