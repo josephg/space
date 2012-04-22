@@ -18,6 +18,7 @@ wss.on 'connection', (client) ->
   closed = false
 
   socket = net.connect 8765, 'sephsmac.local', ->
+  #socket = net.connect 8765, '10.16.4.2', ->
     # connected to server.
     console.log 'connected to server'
 

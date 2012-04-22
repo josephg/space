@@ -33,6 +33,14 @@ shipTypes = "ship bullet".split(' ')
 
 lastFrame = 0
 
+radar = []
+
+models = [
+  {verts:[-25, -25, -20, 0, 0, 20, 20, 0, 25, -25]}, # Ship
+  {verts:[-3, -5, 0, 5, 3, -5]}, # bullet
+]
+m.offset = cp.v.neg cp.centroidForPoly m.verts for m in models
+
 packetHeaders =
   100:
     name: 'snapshot'
@@ -55,19 +63,10 @@ packetHeaders =
           throw new Error "Got a create but no update for #{id}" unless data[id]
           s = data[id]
           s.type = shipTypes[r.uint8()]
-          s.res1 = r.uint8()
-          s.res2 = r.uint8()
-          s.res3 = r.uint8()
+          s.model = models[r.uint8()]
           s.m = r.float32()
           s.i = r.float32()
-
-          numShapes = r.uint16()
-          s.shapes = new Array numShapes
-          for i in [0...numShapes]
-            numVerts = r.uint16()
-            verts = s.shapes[i] = new Array numVerts * 2
-            for v in [0...numVerts * 2]
-              verts[v] = r.float32()
+          s.color = "rgb(#{r.uint8()}, #{r.uint8()}, #{r.uint8()})"
 
       if flags & 4 # Remove frames
         for [0...r.uint16()]
@@ -76,16 +75,16 @@ packetHeaders =
           data[id] = null
 
       if flags & 8 # Radar
-        radar = []
+        rad = []
         for [0...r.uint16()]
           h =
             x: r.float32()
             y: r.float32()
             heat: r.float32()
-          radar.push h
+          rad.push h
 
       throw new Error 'Misaligned bytes' unless r.bytesLeft() is 0
-      {data, radar}
+      {data, radar:rad}
 
   101: # lua messages.
     name: 'lua message'
@@ -113,16 +112,18 @@ applySnapshot = (snapshot) ->
   if prevSnapshot isnt null and snapshot.frame isnt prevSnapshot.frame + snapshotDelay
     throw new Error "Snapshots not applied in order: #{prevSnapshot.frame} -> #{snapshot.frame}"
 
+  radar = snapshot.radar if snapshot.radar
+
   # Look for new objects in the snapshot and add them to the bodies set
   for id, s of snapshot.data when s isnt null and bodies[id] is undefined
     # Make a new body using the data and add it to the space.
-    throw new Error "missing data for #{id}" unless s.shapes
+    throw new Error "missing data for #{id}" unless s.model?
     #console.log "adding #{id}"
     b = bodies[id] = new cp.Body s.m, s.i
-    b.geometry = []
+    b.model = s.model
     b.type = s.type
-    for verts in s.shapes
-      b.geometry.push new cp.PolyShape b, verts, cp.v(0,0)
+    b.geometry = [new cp.PolyShape b, b.model.verts, b.model.offset]
+    b.color = s.color
 
   for id, b of bodies # Bodies that are no longer in the region sent by the server
     s = snapshot.data[id]
@@ -154,6 +155,7 @@ applySnapshot = (snapshot) ->
         ay: p.ay
         aw: p.aw
 
+    b.prevSnapshot = s
     b.setAngle s.a # Angle
     b.setPos cp.v(s.x, s.y)
     b.w = s.w # Angular momentum
@@ -179,39 +181,56 @@ applySnapshot = (snapshot) ->
     
   frame = snapshot.frame
 
+lerp = (a, b, t) -> a*(1 - t) + b*t
 
-snapshotted = false
 update = ->
   #console.log 'update'
   return if frame is null # No snapshots yet
 
-  frame++
-
-  return if frame < 0 # Delaying for extra smoothness
-
   snapshot = null
   skip = false
 
-  while (pendingSnapshots.length > 0 and pendingSnapshots[0].frame <= frame) or
+  # If we get super lag or disconnected, pause the simulation.
+  return if pendingSnapshots.length == 0
+
+  frame++
+
+  while (pendingSnapshots.length >= 2 and pendingSnapshots[0].frame <= frame) or
       pendingSnapshots.length >= 2
     skip = true
     applySnapshot pendingSnapshots.shift()
 
-  snapshotted = skip
+  if pendingSnapshots.length == 1 and pendingSnapshots[0].frame == frame
+    # We've caught up to the server. Wait for the next snapshot frame.
+    frame--
+    skip = true
 
-  space.eachBody (body) ->
+  unless skip
+    nextSnapshot = pendingSnapshots[0]
+    space.eachBody (body) ->
+      if body.ax || body.ay || body.aw
+        a = cp.v.rotate cp.v(body.ax, body.ay), body.rot
+        body.vx += dt/1000 * a.x
+        body.vy += dt/1000 * a.y
+        #body.setVelocity cp.v(body.vx + dt/1000, body.vy + dt/1000)
+        body.w += dt/1000 * body.aw
+
+    space.step dt/1000
+
+    # We'll also just lerp toward the angle and velocity of the subsequent snapshot frame. This
+    # makes animation smoother.
+    t = 1 + (frame - nextSnapshot.frame) / snapshotDelay
+    for id, s of nextSnapshot.data when s and bodies[id]?.space
+      b = bodies[id]
+      p = bodies[id].prevSnapshot
+      # Track towards our next acceleration. I would lerp, but I'm lazy.
+      #console.log p.a, s.a, t, lerp p.a, s.a, t
+      b.setAngle lerp p.a, s.a, t
+      #body.ay = mix * body.ay + (1-mix) * nextSnapshot.data[body.id].ay
+      #body.aw = mix * body.aw + (1-mix) * nextSnapshot.data[body.id].aw
 
 
-    if body.ax || body.ay || body.aw
-      a = cp.v.rotate cp.v(body.ax, body.ay), body.rot
-      body.vx += dt/1000 * a.x
-      body.vy += dt/1000 * a.y
-      #body.setVelocity cp.v(body.vx + dt/1000, body.vy + dt/1000)
-      body.w += dt/1000 * body.aw
-
-  space.step dt/1000 unless skip
-
-  if body = bodies[avatar]
+  if (body = bodies[avatar])
     viewportX = body.p.x - canvas.width/2
     viewportY = body.p.y - canvas.height/2
 
@@ -238,14 +257,10 @@ draw = ->
   #ctx.fillStyle = 'green'
   #ctx.fillRect 100*pendingSnapshots.length, 0, 100, 100
   
-  #ctx.fillStyle = 'red'
-  #ctx.fillRect 25, 25, 50, 50 if snapshotted
-
   #ctx.strokeStyle = 'blue'
   #ctx.strokeRect 100, 100, 600, 400
 
 
-  ctx.save()
   for {x, y, d, t} in starfield
     r = d * 6
     #grd = ctx.createRadialGradient x, y, 0, x, y, r
@@ -260,7 +275,6 @@ draw = ->
     y += canvas.height if y < 0
     ctx.arc x, y, r, 0, Math.PI*2
     ctx.fill()
-  ctx.restore()
 
 
   ctx.save()
@@ -274,14 +288,34 @@ draw = ->
 
   ctx.translate -viewportX, -viewportY
 
+  cx = viewportX + canvas.width / 2
+  cy = viewportY + canvas.height / 2
+  radius = Math.min(canvas.width, canvas.height) / 2
+
+  for {x, y, heat} in radar when x < viewportX or x > viewportX + canvas.width or
+      y < viewportY or y > viewportY + canvas.height
+
+    ctx.fillStyle = "rgba(255, 100, 100, 0.5)"
   
+    vect = cp.v(x - cx, y - cy)
+    dist = cp.v.len vect
+    dot = cp.v.mult(cp.v.normalize(vect), radius)
+
+    #console.log dot.x, dist, radius
+    
+    r = 1/Math.log(Math.E + (dist - radius) / 100) * 50
+    ctx.beginPath()
+    ctx.arc dot.x + cx, dot.y + cy, r, 0, Math.PI*2
+    #ctx.arc cx, cy, 100, 0, Math.PI*2
+    ctx.fill()
+
 
   space.eachShape (shape) ->
     ctx.strokeStyle = 'grey'
     #ctx.fillStyle = 'rgba(0, 0, 0, 0.2)'
     #console.log "draw #{shape.body.p.x}"
     col = 255 - Math.floor shape.body.m / 100 * 255
-    ctx.fillStyle = "rgb(#{col}, #{col}, #{col})"
+    ctx.fillStyle = shape.body.color
 
     shape.draw()
 
@@ -337,25 +371,25 @@ ws.onmessage = (msg) ->
 
 send = (msg) -> ws.send JSON.stringify msg
 
-queuedMessage = false
-sendViewportToServer = ->
-  # Send a rate limited viewport message to the server.
-  return if queuedMessage
-  queuedMessage = true
-  setTimeout ->
-      send viewport:{x:viewportX, y:viewportY, w:canvas.width, h:canvas.height}
-      queuedMessage = false
-    , 100
+rateLimit = (fn) ->
+  queuedMessage = false
+  (arg) ->
+    return if queuedMessage
+    queuedMessage = true
+    setTimeout ->
+        queuedMessage = false
+        fn(arg)
+      , 200
+
+username = if window.location.hash
+  window.location.hash.substr(1)
+else
+  prompt "LOGIN PLOX"
+  window.location.hash = username
 
 ws.onopen = ->
-  if window.location.hash
-    username = window.location.hash.substr(1)
-  else
-    username = prompt "LOGIN PLOX"
-    window.location.hash = username
-
   ws.send username
-  sendViewportToServer()
+  #sendViewportToServer()
   lastFrame = Date.now()
   runFrame()
 
@@ -364,6 +398,19 @@ document.onmousewheel = (e) ->
   viewportX -= e.wheelDeltaX
   viewportY += e.wheelDeltaY
   e.preventDefault()
+
+if username is 'seph'
+  sendTarget = rateLimit (e) ->
+    x = e.offsetX - canvas.width / 2
+    y = canvas.height / 2 - e.offsetY
+    targetAngle = Math.atan2 -x, y
+    # Round it a bit to make the message smaller
+    targetAngle = Math.floor(targetAngle * 100) / 100
+    ws.send "a #{targetAngle}"
+    #ws.send "#{e.offsetX} #{canvas.height - e.offsetY}"
+
+  canvas.onmousemove = (e) -> sendTarget e
+    
 
 downKeys = {}
 
@@ -389,33 +436,6 @@ document.onkeydown = (e) -> keyEvent e, true
 document.onkeyup = (e) -> keyEvent e, false
 
 cp.PolyShape::draw = ->
-  
-  cx = viewportX + canvas.width / 2
-  cy = viewportY + canvas.height / 2
-  radius = Math.min(canvas.width, canvas.height) / 2
-
-  p = @body.p
-  if  @body.type is 'ship' and
-      (p.x < viewportX or p.x > viewportX + canvas.width or
-      p.y < viewportY or p.y > viewportY + canvas.height)
-
-    ctx.save()
-    ctx.strokeStyle = "rgba(255, 100, 100, 1)"
-    ctx.fillStyle = "rgba(255, 100, 100, 0.5)"
-    
-    ctx.beginPath()
-    vect = cp.v.sub(p, cp.v(cx, cy))
-    dist = cp.v.len vect
-    dot = cp.v.mult(cp.v.normalize(vect), radius)
-    
-    r = 1/Math.log(Math.E + (dist - radius) / 100) * 50
-    ctx.arc dot.x + cx, dot.y + cy, r, 0, Math.PI*2
-    ctx.fill()
-    ctx.restore()
-
-
-
-
   ctx.beginPath()
 
   verts = @tVerts
