@@ -24,6 +24,19 @@ read = (buffer, offset, len) ->
   float64: -> view.getFloat64 (p 8), true
   float32: -> view.getFloat32 (p 4), true
 
+  skip: (x) -> pos += x
+
+  bytestring: (len) ->
+    s = new Array(len)
+    for i in [0...len]
+      c = @uint8()
+      unless c # Skip '\0'
+        @skip len - i - 1
+        return s.join ''
+
+      s[i] = String.fromCharCode c
+    s.join ''
+
   bytesLeft: -> view.byteLength - pos
 
 

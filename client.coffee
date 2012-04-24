@@ -9,12 +9,11 @@ ws.binaryType = 'arraybuffer'
 
 ws.onerror = (e) -> console.log e
 
-space = new cp.Space
-
 # Map from id -> body.
 bodies = {}
 
-frame = null
+frame = 0
+prevSnapshot = {frame:-5, data:{}}
 
 # MUST match the server's snapshotDelay value
 snapshotDelay = 5 # Frames between subsequent snapshots.
@@ -23,6 +22,7 @@ delay = 5 # Our delay in frames behind realtime
 pendingSnapshots = []
 
 dt = 33 # dt per tick (ms). Must match server.
+fmult = dt / 1000
 
 viewportX = viewportY = 0
 
@@ -31,7 +31,7 @@ requestAnimationFrame = window.requestAnimationFrame or window.mozRequestAnimati
 
 shipTypes = "ship bullet".split(' ')
 
-lastFrame = 0
+lastFrameTime = 0
 
 radar = []
 
@@ -41,6 +41,8 @@ models = [
 ]
 m.offset = cp.v.neg cp.centroidForPoly m.verts for m in models
 
+dirty = false
+
 packetHeaders =
   100:
     name: 'snapshot'
@@ -49,32 +51,49 @@ packetHeaders =
 
       flags = r.uint8()
 
-      if flags & 1 # Update frames
+      if flags & 0x1 # Update frames
         for [0...r.uint16()]
           # Read an update packet.
           id = r.uint32()
-          data[id] = s = {}
-          s[k] = r.float32() for k in ['x', 'y', 'a', 'vx', 'vy', 'w', 'ax', 'ay', 'aw']
-
-      if flags & 2 # Create frames
+          data[id] = s = {u:[]}
+          bits = r.uint8() # Contains 1 bit set for each frame's data
+          for f in [0...snapshotDelay]
+            x = 1<<f
+            if bits & x
+              s.u[f] = {x:r.float32(), y:r.float32(), a:r.float32()}
+              unless bits & (x<<1)
+                s.u[f][k] = r.float32() for k in ['dx', 'dy', 'da', 'ddx', 'ddy', 'dda']
+ 
+      if flags & 0x2 # Create frames
         for [0...r.uint16()]
           # Create packets
           id = r.uint32()
-          throw new Error "Got a create but no update for #{id}" unless data[id]
-          s = data[id]
+          throw new Error "Got a create and an update for #{id}" if data[id]
+          data[id] = s = {} # We should never get a create and an 
           s.type = shipTypes[r.uint8()]
           s.model = models[r.uint8()]
-          s.m = r.float32()
-          s.i = r.float32()
-          s.color = "rgb(#{r.uint8()}, #{r.uint8()}, #{r.uint8()})"
+          #s.m = r.float32()
+          #s.i = r.float32()
+          s.v_limit = r.float32()
+          s.w_limit = r.float32()
+          s[k] = r.float32() for k in ['x', 'y', 'a', 'dx', 'dy', 'da', 'ddx', 'ddy', 'dda']
 
-      if flags & 4 # Remove frames
+      if flags & 0x4 # Remove frames
         for [0...r.uint16()]
           # Remove objects.
           id = r.uint32()
           data[id] = null
 
-      if flags & 8 # Radar
+      if flags & 0x8 # Ship data
+        for [0...r.uint16()]
+          id = r.uint32()
+          s = (data[id] or= {id})
+          s.loadout = r.bytestring 5*6
+          s.label = r.bytestring 8
+          s.color = "rgb(#{r.uint8()}, #{r.uint8()}, #{r.uint8()})"
+          #console.log "ship data for #{id} #{s.label}"
+
+      if flags & 0x10 # Radar
         rad = []
         for [0...r.uint16()]
           h =
@@ -106,134 +125,116 @@ readPacket = (data) ->
   type: packetHeaders[type].name
   data: packetHeaders[type].read r
 
-
-prevSnapshot = null
 applySnapshot = (snapshot) ->
-  if prevSnapshot isnt null and snapshot.frame isnt prevSnapshot.frame + snapshotDelay
-    throw new Error "Snapshots not applied in order: #{prevSnapshot.frame} -> #{snapshot.frame}"
+  throw new Error "Snapshot #{snapshot.frame} preloaded at the wrong frame (#{frame})" unless frame is snapshot.frame
 
-  radar = snapshot.radar if snapshot.radar
+  if prevSnapshot
+    if snapshot.frame isnt prevSnapshot.frame + snapshotDelay
+      throw new Error "Snapshots not applied in order: #{prevSnapshot.frame} -> #{snapshot.frame}"
 
-  # Look for new objects in the snapshot and add them to the bodies set
-  for id, s of snapshot.data when s isnt null and bodies[id] is undefined
-    # Make a new body using the data and add it to the space.
-    throw new Error "missing data for #{id}" unless s.model?
-    #console.log "adding #{id}"
-    b = bodies[id] = new cp.Body s.m, s.i
-    b.model = s.model
-    b.type = s.type
-    b.geometry = [new cp.PolyShape b, b.model.verts, b.model.offset]
-    b.color = s.color
+    radar = prevSnapshot.radar if prevSnapshot.radar
 
-  for id, b of bodies # Bodies that are no longer in the region sent by the server
-    s = snapshot.data[id]
+    for id, s of prevSnapshot.data
+      if s == null
+        delete bodies[id]
+        continue
 
-    if s is null
-      # Remove the object from the space.
-      #console.log "removing #{id}"
-      space.removeBody b
-      space.removeShape shape for shape in b.geometry
+      # Look for new objects in the snapshot and add them to the bodies set
+      b = bodies[id]
+      unless b
+        # Make a new body using the data and add it to the space.
+        throw new Error "missing data for #{id}" unless s.model?
+        #console.log "adding #{id}"
+        b = bodies[id] = s
+        b.u or= []
 
-    # Skip objects that aren't on the screen and aren't being re-added.
-    continue if !b.space and !s
+      # Update data for a ship (color, loadout, etc)
+      if s.color?
+        b.color = s.color
+        b.loadout = s.loadout
+        b.label = s.label
 
-    if s is undefined
-      # The body is just drifting. Update it based on its last snapshot position.
-      throw new Error 'Missing data' unless prevSnapshot?.data[id]
-      p = prevSnapshot.data[id]
-      
-      mult = dt * snapshotDelay / 1000
+      #if s.correction
+      #  b[k] = s.correction[k] for k in ['x', 'y', 'a', 'dx', 'dy', 'da', 'ddx', 'ddy', 'dda']
 
-      s = snapshot.data[id] =
-        a: p.a + p.w * mult
-        x: p.x + p.vx * mult
-        y: p.y + p.vy * mult
-        w: p.w
-        vx: p.vx
-        vy: p.vy
-        ax: p.ax
-        ay: p.ay
-        aw: p.aw
-
-    b.prevSnapshot = s
-    b.setAngle s.a # Angle
-    b.setPos cp.v(s.x, s.y)
-    b.w = s.w # Angular momentum
-    b.setVelocity cp.v(s.vx, s.vy)
-
-    b.ax = s.ax
-    b.ay = s.ay
-    b.aw = s.aw
-
-    if !b.space
-      # re-add the body to the space.
-      #console.log "inserting #{id}"
-      space.addBody b
-      space.addShape s for s in b.geometry
-    else
-      space.reindexShape s for s in b.shapeList
+  for id, s of snapshot.data when s?.u
+    throw new Error 'skipping a u' if bodies[id].u.length
+    bodies[id].u = s.u # Object update booster pack!
 
   prevSnapshot = snapshot
-  
-  if frame isnt snapshot.frame
-    console.log "time warping from #{frame} to #{snapshot.frame}"
-    lastFrame = Date.now()
+
+vrotate = (v1, v2) ->
+  x: v1.x*v2.x - v1.y*v2.y, y: v1.x*v2.y + v1.y*v2.x
+
+clamp = (x, min, max) -> Math.max(min, Math.min(x, max))
+
+vclamp = (v, len) ->
+  l2 = v.x*v.x + v.y*v.y
+  return if l2 > len*len
+    mul = len / Math.sqrt l2
+    {x:mul * v.x, y:mul * v.y}
+  else
+    v
+
+iterateSimulation = ->
+  for id, body of bodies
+    #console.log "iterate", body.u.length
+    u = body.u.shift()
+    #console.log body.a, body.da, body.dda, u?.a
+    if u
+      body.x = u.x
+      body.y = u.y
+      body.a = u.a
+      if u.dx?
+        body.dx = u.dx
+        body.dy = u.dy
+        body.da = u.da
+        body.ddx = u.ddx
+        body.ddy = u.ddy
+        body.dda = u.dda
+
+    else
+      # ddx, ddy are in body coordinates.
+      rot = x:Math.cos(body.a), y:Math.sin(body.a)
+      dd = vrotate {x:body.ddx, y:body.ddy}, rot
     
-  frame = snapshot.frame
+      d = x: body.dx + dd.x * fmult, y: body.dy + dd.y * fmult
+      d = vclamp d, body.v_limit
+      body.dx = d.x
+      body.dy = d.y
 
-lerp = (a, b, t) -> a*(1 - t) + b*t
+      body.x += body.dx * fmult
+      body.y += body.dy * fmult
 
-update = ->
-  #console.log 'update'
-  return if frame is null # No snapshots yet
+      body.da = clamp(body.da + body.dda * fmult, -body.w_limit, body.w_limit)
+      body.a += body.da * fmult
 
-  snapshot = null
-  skip = false
-
-  # If we get super lag or disconnected, pause the simulation.
-  return if pendingSnapshots.length == 0
+    #throw new Error('aa') if Math.abs(body.x) > 3500
+    #throw new Error('aa') if Math.abs(body.y) > 3500
 
   frame++
+  dirty = true
 
-  while (pendingSnapshots.length >= 2 and pendingSnapshots[0].frame <= frame) or
-      pendingSnapshots.length >= 2
-    skip = true
-    applySnapshot pendingSnapshots.shift()
 
-  if pendingSnapshots.length == 1 and pendingSnapshots[0].frame == frame
-    # We've caught up to the server. Wait for the next snapshot frame.
-    frame--
-    skip = true
+update = ->
+  # If we get lag of more than one snapshot frame or are disconnected, pause the simulation.
+  # This will also happen before the first snapshot frame has been recieved.
+  return if frame == prevSnapshot.frame + snapshotDelay and pendingSnapshots.length == 0
 
-  unless skip
-    nextSnapshot = pendingSnapshots[0]
-    space.eachBody (body) ->
-      if body.ax || body.ay || body.aw
-        a = cp.v.rotate cp.v(body.ax, body.ay), body.rot
-        body.vx += dt/1000 * a.x
-        body.vy += dt/1000 * a.y
-        #body.setVelocity cp.v(body.vx + dt/1000, body.vy + dt/1000)
-        body.w += dt/1000 * body.aw
+  # We've fallen behind.
+  while pendingSnapshots.length >= 1 # Increase me to 2 to improve lag tollerance.
+    snapshot = pendingSnapshots.shift()
+    if frame < snapshot.frame
+      console.log "warping #{frame} -> #{snapshot.frame}"
+      iterateSimulation() while frame < snapshot.frame
+      lastFrameTime = Date.now()
+    applySnapshot snapshot
 
-    space.step dt/1000
-
-    # We'll also just lerp toward the angle and velocity of the subsequent snapshot frame. This
-    # makes animation smoother.
-    t = 1 + (frame - nextSnapshot.frame) / snapshotDelay
-    for id, s of nextSnapshot.data when s and bodies[id]?.space
-      b = bodies[id]
-      p = bodies[id].prevSnapshot
-      # Track towards our next acceleration. I would lerp, but I'm lazy.
-      #console.log p.a, s.a, t, lerp p.a, s.a, t
-      b.setAngle lerp p.a, s.a, t
-      #body.ay = mix * body.ay + (1-mix) * nextSnapshot.data[body.id].ay
-      #body.aw = mix * body.aw + (1-mix) * nextSnapshot.data[body.id].aw
-
+  iterateSimulation()
 
   if (body = bodies[avatar])
-    viewportX = body.p.x - canvas.width/2
-    viewportY = body.p.y - canvas.height/2
-
+    viewportX = body.x - canvas.width/2
+    viewportY = body.y - canvas.height/2
 
 starfield = ({
     x: Math.random()*canvas.width
@@ -243,23 +244,13 @@ starfield = ({
     t: Math.random()
 } for [1..200])
 
-dirty = false
 draw = ->
   return unless dirty # Only draw once despite how many updates have happened
+  dirty = false
+
   #console.log 'draw'
   ctx.fillStyle = 'black'
   ctx.fillRect 0, 0, canvas.width, canvas.height
-
-  if frame is null or frame < 0
-    ctx.font = '60px Helvetica'
-    ctx.fillText 'Buffering gameplay', 0, 0, 0
-
-  #ctx.fillStyle = 'green'
-  #ctx.fillRect 100*pendingSnapshots.length, 0, 100, 100
-  
-  #ctx.strokeStyle = 'blue'
-  #ctx.strokeRect 100, 100, 600, 400
-
 
   for {x, y, d, t} in starfield
     r = d * 6
@@ -276,17 +267,17 @@ draw = ->
     ctx.arc x, y, r, 0, Math.PI*2
     ctx.fill()
 
-
   ctx.save()
   ctx.translate 0, canvas.height
   ctx.scale 1, -1
 
-  #ctx.translate canvas.width/2, canvas.height/2
-  #if bodies[avatar]
-  #  ctx.rotate -bodies[avatar].a
-  #ctx.translate -canvas.width/2, -canvas.height/2
-
   ctx.translate -viewportX, -viewportY
+
+  ctx.fillStyle = '#0000cc'
+  ctx.fillRect -3000, -3000-10, 6000, 10
+  ctx.fillRect -3000-10, -3000, 10, 6000
+  ctx.fillRect 3000, -3000, 10, 6000
+  ctx.fillRect -3000, 3000, 6000, 10
 
   cx = viewportX + canvas.width / 2
   cy = viewportY + canvas.height / 2
@@ -301,42 +292,53 @@ draw = ->
     dist = cp.v.len vect
     dot = cp.v.mult(cp.v.normalize(vect), radius)
 
-    #console.log dot.x, dist, radius
-    
     r = 1/Math.log(Math.E + (dist - radius) / 100) * 50
     ctx.beginPath()
     ctx.arc dot.x + cx, dot.y + cy, r, 0, Math.PI*2
     #ctx.arc cx, cy, 100, 0, Math.PI*2
     ctx.fill()
 
-
-  space.eachShape (shape) ->
+  for id, body of bodies
+    ctx.fillStyle = body.color or 'red'
+    ctx.lineWidth = 1.5
     ctx.strokeStyle = 'grey'
-    #ctx.fillStyle = 'rgba(0, 0, 0, 0.2)'
-    #console.log "draw #{shape.body.p.x}"
-    col = 255 - Math.floor shape.body.m / 100 * 255
-    ctx.fillStyle = shape.body.color
 
-    shape.draw()
+    ctx.save()
+    ctx.translate body.x, body.y
+    ctx.rotate body.a
+    ctx.beginPath()
+
+    verts = body.model.verts
+    len = verts.length
+    ctx.moveTo verts[len - 2] + body.model.offset.x, verts[len - 1] + body.model.offset.y
+    for i in [0...len] by 2
+      ctx.lineTo verts[i] + body.model.offset.x, verts[i+1] + body.model.offset.y
+
+    ctx.fill()
+    ctx.stroke()
+    ctx.restore()
+
+    if body.label
+      ctx.scale 1, -1
+      ctx.font = '14px Helvetica'
+      ctx.textAlign = 'center'
+      ctx.fillText body.label, body.x, -body.y + 50
+      ctx.scale 1, -1
 
   ctx.restore()
-
-  dirty = false
 
 avatar = null
 
 runFrame = ->
-  nominalTime = lastFrame + dt
+  nominalTime = lastFrameTime + dt
   actualTime = Date.now()
   setTimeout runFrame, Math.max(0, nominalTime - actualTime + dt)
-  lastFrame = nominalTime
+  lastFrameTime = nominalTime
 
   update()
-  if !dirty
-    dirty = true
-    requestAnimationFrame draw
+  requestAnimationFrame draw if dirty
 
-nextSnapshotFrame = 0
+nextNetSnapshotFrame = 0
 ws.onmessage = (msg) ->
   if typeof msg.data is 'string'
     msg = JSON.parse msg.data
@@ -351,10 +353,10 @@ ws.onmessage = (msg) ->
         snapshot =
           data: msg.data.data
           radar: msg.data.radar
-          frame: nextSnapshotFrame
+          frame: nextNetSnapshotFrame
         #console.log "frame #{frame} got snapshot #{snapshot.frame}"
         #console.log snapshot.data
-        nextSnapshotFrame += snapshotDelay
+        nextNetSnapshotFrame += snapshotDelay
         pendingSnapshots.push snapshot
 
         if frame is null
@@ -373,24 +375,24 @@ send = (msg) -> ws.send JSON.stringify msg
 
 rateLimit = (fn) ->
   queuedMessage = false
-  (arg) ->
+  ->
     return if queuedMessage
     queuedMessage = true
     setTimeout ->
         queuedMessage = false
-        fn(arg)
-      , 200
+        fn()
+      , 50
 
 username = if window.location.hash
   window.location.hash.substr(1)
 else
   prompt "LOGIN PLOX"
-  window.location.hash = username
+window.location.hash = username
 
 ws.onopen = ->
   ws.send username
   #sendViewportToServer()
-  lastFrame = Date.now()
+  lastFrameTime = Date.now()
   runFrame()
 
 document.onmousewheel = (e) ->
@@ -400,16 +402,16 @@ document.onmousewheel = (e) ->
   e.preventDefault()
 
 if username is 'seph'
-  sendTarget = rateLimit (e) ->
+  targetAngle = null
+  sendTarget = rateLimit -> ws.send "a #{targetAngle}" if ws.readyState is WebSocket.OPEN
+
+  canvas.onmousemove = (e) ->
     x = e.offsetX - canvas.width / 2
     y = canvas.height / 2 - e.offsetY
     targetAngle = Math.atan2 -x, y
     # Round it a bit to make the message smaller
     targetAngle = Math.floor(targetAngle * 100) / 100
-    ws.send "a #{targetAngle}"
-    #ws.send "#{e.offsetX} #{canvas.height - e.offsetY}"
-
-  canvas.onmousemove = (e) -> sendTarget e
+    sendTarget e
     
 
 downKeys = {}
@@ -434,19 +436,4 @@ keyEvent = (e, down) ->
 
 document.onkeydown = (e) -> keyEvent e, true
 document.onkeyup = (e) -> keyEvent e, false
-
-cp.PolyShape::draw = ->
-  ctx.beginPath()
-
-  verts = @tVerts
-  len = verts.length
-
-  ctx.moveTo verts[len - 2], verts[len - 1]
-
-  for i in [0...len] by 2
-    ctx.lineTo verts[i], verts[i+1]
-
-  ctx.fill()
-  ctx.stroke()
-
 

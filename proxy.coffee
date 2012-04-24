@@ -11,6 +11,14 @@ initialSnapshot = JSON.parse initialSnapshot if initialSnapshot
 WebSocketServer = require('ws').Server
 wss = new WebSocketServer {server: app}
 
+cs = 0
+sc = 0
+
+setInterval ->
+    console.log "C->S: #{cs} B/s   S->C: #{sc} B/s"
+    cs = sc = 0
+  , 1000
+
 wss.on 'connection', (client) ->
   # Open a separate TCP connection for every WS connection
   console.log 'incoming connection from client'
@@ -39,6 +47,7 @@ wss.on 'connection', (client) ->
   lenBuf = new Buffer 4
 
   client.on 'message', (msg, {binary}) ->
+    cs += msg.length
     if binary
       # I need to prefix the packet with the length.
       lenBuf.writeUInt32LE(msg.length - 4, 0)
@@ -74,6 +83,7 @@ wss.on 'connection', (client) ->
       return dest if p == num
 
   socket.on 'data', (data) ->
+    sc += data.length
     return if closed
     buffers.push data
 
