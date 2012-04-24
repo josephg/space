@@ -286,13 +286,29 @@ draw = ->
   for {x, y, heat} in radar when x < viewportX or x > viewportX + canvas.width or
       y < viewportY or y > viewportY + canvas.height
 
-    ctx.fillStyle = "rgba(255, 100, 100, 0.5)"
   
-    vect = cp.v(x - cx, y - cy)
-    dist = cp.v.len vect
-    dot = cp.v.mult(cp.v.normalize(vect), radius)
+    x = x - cx
+    y = y - cy
+    m = y/x
+    w = canvas.width
+    h = canvas.height
 
-    r = 1/Math.log(Math.E + (dist - radius) / 100) * 50
+    hf = Math.log(Math.E + heat)/6
+    #console.log "heat", heat, "hf", hf
+    ctx.fillStyle = "hsla(0, #{Math.round(100*hf)}%, 50%, #{hf})"
+
+    if Math.abs(m) > 1
+      y = clamp(y, -h/2, h/2)
+      x = y / m
+    else
+      x = clamp(x, -w/2, w/2)
+      y = x * m
+
+    #dot = cp.v.mult(cp.v.normalize(vect), radius)
+    dot = {x, y}
+    dist = cp.v.len dot
+
+    r = 1/Math.log(Math.E + (dist) / 100) * 50
     ctx.beginPath()
     ctx.arc dot.x + cx, dot.y + cy, r, 0, Math.PI*2
     #ctx.arc cx, cy, 100, 0, Math.PI*2
