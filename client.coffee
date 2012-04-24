@@ -36,10 +36,13 @@ lastFrameTime = 0
 radar = []
 
 models = [
-  {verts:[-25, -25, -20, 0, 0, 20, 20, 0, 25, -25]}, # Ship
+  {verts:[-20, -20, -15, 0, 0, 15, 15, 0, 20, -20]}, # Ship
   {verts:[-3, -5, 0, 5, 3, -5]}, # bullet
 ]
 m.offset = cp.v.neg cp.centroidForPoly m.verts for m in models
+
+#for m in models
+#  m.verts[i] *= .7 for i in [0...m.verts.length]
 
 dirty = false
 
