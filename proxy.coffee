@@ -25,7 +25,7 @@ wss.on 'connection', (client) ->
 
   closed = false
 
-  socket = net.connect 8765, 'sephsmac.local', ->
+  socket = net.connect 8765, 'localhost', ->
   #socket = net.connect 8765, '10.16.4.2', ->
     # connected to server.
     console.log 'connected to server'
@@ -48,6 +48,7 @@ wss.on 'connection', (client) ->
 
   client.on 'message', (msg, {binary}) ->
     cs += msg.length
+    return if closed or not socket._handle
     if binary
       # I need to prefix the packet with the length.
       lenBuf.writeUInt32LE(msg.length - 4, 0)

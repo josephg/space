@@ -298,7 +298,7 @@ draw = ->
 
     hf = Math.log(Math.E + heat)/6
     #console.log "heat", heat, "hf", hf
-    ctx.fillStyle = "hsla(0, #{Math.round(100*hf)}%, 50%, #{hf})"
+    ctx.fillStyle = "hsla(0, #{Math.round(100*hf)}%, 50%, #{0.2 + 0.8*hf})"
 
     if Math.abs(m) > 1
       y = clamp(y, -h/2, h/2)
@@ -414,6 +414,21 @@ ws.onopen = ->
   lastFrameTime = Date.now()
   runFrame()
 
+reconnect = ->
+  newws = new WebSocket ws.url
+  for m in "open close message error".split(' ')
+    newws["on#{m}"] = ws["on#{m}"]
+  newws.binaryType = 'arraybuffer'
+
+  ws = newws
+  return newws
+
+ws.onclose = ->
+  reconnect()
+
+ws.onerror = ->
+  setTimeout reconnect, 5000
+
 document.onmousewheel = (e) ->
   #console.log "mouse scroll", e
   viewportX -= e.wheelDeltaX
@@ -438,6 +453,13 @@ downKeys = {}
 keyEvent = (e, down) ->
   key = String.fromCharCode e.keyCode
   #console.log e.keyCode, key
+
+  if key is "R" and e.shiftKey and down is true
+    console.log "sending reload"
+    ws.send "reload"
+    e.stopPropagation()
+    e.preventDefault()
+
 
   m = {'W':'up', 'A':'left', 'S':'down', 'D':'right', ' ':'fire'}
   if m[key]
