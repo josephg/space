@@ -1,15 +1,19 @@
 express = require 'express'
 net = require 'net'
+http = require 'http'
 
-app = express.createServer()
+app = express()
 
 app.use express.static("#{__dirname}/")
 port = 8123
 
+server = http.createServer app
+
+
 initialSnapshot = JSON.parse initialSnapshot if initialSnapshot
 
 WebSocketServer = require('ws').Server
-wss = new WebSocketServer {server: app}
+wss = new WebSocketServer {server}
 
 cs = 0
 sc = 0
@@ -111,6 +115,6 @@ wss.on 'connection', (client) ->
         else
           break
 
-app.listen port
+server.listen port
 console.log "Listening on port #{port}"
 

@@ -424,7 +424,9 @@ reconnect = ->
   return newws
 
 ws.onclose = ->
-  reconnect()
+  setTimeout ->
+    reconnect()
+  , 3000
 
 ws.onerror = ->
   setTimeout reconnect, 5000
